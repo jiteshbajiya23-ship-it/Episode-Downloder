@@ -61,14 +61,14 @@ async def health_route_handler(request):
     return web.json_response({"status": "ok", "uptime_seconds": int(time.time() - temp.START_TIME)})
 
 
-@routes.get(r"/watch/{path:\S+}", allow_head=True)
+@routes.get(r"/watch/{path:.+}", allow_head=True)
 @_safe
 async def watch_handler(request: web.Request):
     id, secure_hash = _parse(request.match_info["path"], request)
     return web.Response(text=await render_page(id, secure_hash), content_type="text/html")
 
 
-@routes.get(r"/{path:\S+}", allow_head=True)
+@routes.get(r"/{path:.+}", allow_head=True)
 @_safe
 async def stream_handler(request: web.Request):
     id, secure_hash = _parse(request.match_info["path"], request)
