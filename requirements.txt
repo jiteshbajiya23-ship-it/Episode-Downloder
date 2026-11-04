@@ -1,0 +1,16 @@
+pyrofork
+tgcrypto
+aiohttp
+python-dotenv
+motor
+aiofiles
+dnspython
+apscheduler
+requests
+beautifulsoup4
+psutil
+shortzy
+jinja2
+humanize
+pytz
+yt-dlp[default,curl-cffi]
