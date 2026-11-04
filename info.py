@@ -64,6 +64,14 @@ SITE_NAME = environ.get('SITE_NAME', 'Xiao Bhai Donghua')
 # True            = anybody can make links (admin commands stay admin-only).
 PUBLIC_MODE = _bool('PUBLIC_MODE', False)
 
+# Force Subscribe: non-admin users must join ALL these channels before the bot works.
+# Space separated. Use channel IDs (-100...) or @usernames. The bot must be ADMIN in each channel.
+# Example: FORCE_SUB_CHANNELS=-1001111111111 -1002222222222 @mychannel
+FORCE_SUB_CHANNELS = [int(c) if id_pattern.search(c) else c.lstrip('@')
+                      for c in environ.get('FORCE_SUB_CHANNELS', '').split()]
+# Optional: join links in the SAME order (needed only for private channels if the bot can't create invite links)
+FORCE_SUB_LINKS = environ.get('FORCE_SUB_LINKS', '').split()
+
 # Storage / auto cleanup (free servers have a tiny disk)
 DOWNLOAD_DIR = environ.get('DOWNLOAD_DIR', '/tmp/xiaobhai_dl')
 MIN_FREE_MB = int(environ.get('MIN_FREE_MB', '300'))              # alert + auto-clean below this

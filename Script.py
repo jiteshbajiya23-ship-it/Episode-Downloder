@@ -42,7 +42,7 @@ Your admin panel is ready.
 🔗 Send an <b>xiaobhaidonghua.com episode link</b> → pick qualities and upload
 ♻️ Failed qualities get a <b>Retry</b> button, errors go to the log channel."""
 
-    REFUSE_TXT = """🙅 <b>Sorry, I don't want to talk to you.</b>
+    REFUSE_TXT = """🙅 <b>I talk to my owner only.</b>
 
 <i>This is a private bot — only my owner can use me.</i>"""
 
