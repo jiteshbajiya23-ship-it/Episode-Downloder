@@ -24,6 +24,4 @@ Made for https://xiaobhaidonghua.com
 ## Admin commands
 /status /health /ping /cleanup /errors /revoke /help /broadcast
 
-## Credits
 
-Based on VJBots/FileToLink (https://github.com/VJBots/FileToLink), licensed under GPL-3.0. See LICENSE.
