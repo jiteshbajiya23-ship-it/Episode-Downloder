@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ file_name }} | {{ site_name }}</title>
+  <meta name="robots" content="noindex, nofollow">
+  <style>
+    :root { --bg:#0b0b12; --card:#14141f; --text:#f2f2f7; --muted:#9a9ab0; --accent1:#ec4899; --accent2:#8b5cf6; }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; min-height:100vh; display:flex; flex-direction:column; }
+    header { padding:14px 18px; background:var(--card); border-bottom:1px solid #23233a; }
+    header a { color:var(--text); text-decoration:none; font-weight:700; font-size:20px;
+      background:linear-gradient(90deg,var(--accent1),var(--accent2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+    main { flex:1; width:100%; max-width:1000px; margin:0 auto; padding:18px; }
+    h1 { font-size:16px; font-weight:600; text-align:center; word-break:break-word; margin-bottom:14px; }
+    video { width:100%; max-height:70vh; background:#000; border-radius:12px; border:1px solid #23233a; }
+    .info { text-align:center; color:var(--muted); font-size:13px; margin:10px 0 16px; }
+    .actions { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
+    .btn { cursor:pointer; border:0; border-radius:10px; padding:11px 20px; font-size:15px; font-weight:600; color:#fff; text-decoration:none;
+      background:linear-gradient(90deg,var(--accent1),var(--accent2)); }
+    .btn.alt { background:#23233a; }
+    footer { text-align:center; padding:16px; color:var(--muted); font-size:12px; border-top:1px solid #23233a; }
+    footer a { color:var(--text); text-decoration:none; font-weight:600; }
+  </style>
+</head>
+<body>
+  <header><a href="{{ website_url }}" target="_blank" rel="noopener">{{ site_name }}</a></header>
+  <main>
+    <h1>{{ file_name }}</h1>
+    <video id="player" controls playsinline preload="metadata">
+      <source src="{{ file_url }}" type="video/mp4">
+      Your browser does not support this video.
+    </video>
+    <p class="info">Size: {{ file_size }}</p>
+    <div class="actions">
+      <a class="btn" href="{{ file_url }}" download>Download</a>
+      <button class="btn alt" id="copy" type="button" data-url="{{ file_url }}">Copy link</button>
+    </div>
+  </main>
+  <footer>
+    &copy; <script>document.write(new Date().getFullYear())</script>
+    <a href="{{ website_url }}" target="_blank" rel="noopener">{{ site_name }}</a>
+  </footer>
+  <script>
+    document.getElementById("copy").addEventListener("click", function () {
+      var btn = this;
+      var url = btn.dataset.url;
+      var done = function () { btn.textContent = "Copied!"; setTimeout(function () { btn.textContent = "Copy link"; }, 1500); };
+      if (navigator.clipboard) { navigator.clipboard.writeText(url).then(done); }
+      else { window.prompt("Copy this link:", url); }
+    });
+  </script>
+</body>
+</html>
