@@ -46,6 +46,13 @@ KEEP_ALIVE = bool(URL) and _bool('KEEP_ALIVE', True)
 LOG_CHANNEL = int(_required('LOG_CHANNEL'))
 ADMINS = [int(a) if id_pattern.search(a) else a for a in environ.get('ADMINS', '7475888984').split()]
 
+# Owner (only this person can use /restart). Defaults to the first ADMINS entry.
+OWNER_ID = int(environ.get('OWNER_ID', str(ADMINS[0]) if ADMINS and str(ADMINS[0]).lstrip('-').isdigit() else '0'))
+
+# Koyeb redeploy (optional - without these, /restart just restarts the process)
+KOYEB_API_TOKEN = environ.get('KOYEB_API_TOKEN', '').strip()
+KOYEB_SERVICE_ID = environ.get('KOYEB_SERVICE_ID', '').strip()
+
 # MongoDB information
 DATABASE_URI = _required('DATABASE_URI')
 DATABASE_NAME = environ.get('DATABASE_NAME', 'XiaoBhaiCluster')
