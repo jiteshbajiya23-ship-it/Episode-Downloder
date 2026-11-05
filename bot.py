@@ -1,4 +1,5 @@
-import logging, logging.config, asyncio
+import logging, logging.config, asyncio, threading, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import date, datetime
 
 import pytz
@@ -12,6 +13,7 @@ logging.getLogger("aiohttp.web").setLevel(logging.ERROR)
 
 from aiohttp import web
 from pyrogram import idle, enums
+from pyrogram.errors import FloodWait
 
 from info import *
 from utils import temp
@@ -26,7 +28,42 @@ from xiaobhai.util.maintenance import cleanup, cleanup_loop
 
 # Handlers in /plugins are loaded by Pyrogram itself (plugins={"root": "plugins"}),
 # so we must NOT import them again manually.
-StreamBot.start()
+
+
+def _start_with_floodwait():
+    """Telegram can rate-limit bot logins (FloodWait). Instead of crashing (which makes
+    the host restart us and re-trigger the limit), wait it out while answering health checks."""
+    for attempt in range(5):
+        try:
+            StreamBot.start()
+            return
+        except FloodWait as e:
+            wait = int(e.value) + 5
+            logging.warning(f"FloodWait: Telegram asked to wait {wait}s (attempt {attempt + 1}/5). Sleeping...")
+
+            class _Health(BaseHTTPRequestHandler):
+                def do_GET(self):
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b"waiting for Telegram flood limit")
+
+                def log_message(self, *a):
+                    pass
+
+            httpd = None
+            try:
+                httpd = HTTPServer(("0.0.0.0", PORT), _Health)
+                threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            except Exception as ex:
+                logging.warning(f"Health server not started: {ex}")
+            time.sleep(wait)
+            if httpd:
+                httpd.shutdown()
+                httpd.server_close()
+    raise SystemExit("Could not log in to Telegram after repeated FloodWait")
+
+
+_start_with_floodwait()
 loop = asyncio.get_event_loop()
 
 
