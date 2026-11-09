@@ -40,7 +40,8 @@ Your admin panel is ready.
 ━━━━━━━━━━━━━━━━━━
 📤 Send any <b>file</b> → get links
 🔗 Send an <b>xiaobhaidonghua.com episode link</b> → pick qualities and upload
-♻️ Failed qualities get a <b>Retry</b> button, errors go to the log channel."""
+♻️ Failed qualities get a <b>Retry failed</b> button, errors go to the log channel.
+⚡ If Dailymotion blocks yt-dlp (401), the <b>VidsSave fallback</b> takes over automatically (no subtitle on fallback)."""
 
     REFUSE_TXT = """🙅 <b>I talk to my owner only.</b>
 
