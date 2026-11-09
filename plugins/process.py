@@ -15,6 +15,8 @@ Optional env variables:
   DOWNLOAD_CONNECTIONS=8          ARIA2_CONNECTIONS=16    USE_ARIA2=auto|on|off
   YTDLP_PROXY=http://user:pass@host:port   (only if Dailymotion blocks the server IP)
   YTDLP_COOKIES_B64=<base64 of dailymotion cookies.txt>   (helps with HTTP 401)
+  INSPECT_RETRIES=3               how many times yt-dlp is retried on 401/403/429/timeouts
+  VIDSSAVE_API_URL=...            turns ON the VidsSave fallback (see README)
 """
 import asyncio
 import base64
@@ -46,6 +48,7 @@ from info import ADMINS, LOG_CHANNEL, URL, SHORTLINK
 from utils import get_shortlink
 from xiaobhai.util.human_readable import humanbytes
 from xiaobhai.util.file_properties import get_name, get_hash
+from xiaobhai.util import vidssave
 
 log = logging.getLogger("process")
 
@@ -57,6 +60,7 @@ DOWNLOAD_ATTEMPTS = max(1, int(environ.get("DOWNLOAD_ATTEMPTS", "3") or 3))
 DOWNLOAD_CONNECTIONS = max(1, int(environ.get("DOWNLOAD_CONNECTIONS", "8") or 8))
 ARIA2_CONNECTIONS = min(16, max(1, int(environ.get("ARIA2_CONNECTIONS", "16") or 16)))
 USE_ARIA2 = environ.get("USE_ARIA2", "auto").strip().lower()
+INSPECT_RETRIES = max(1, int(environ.get("INSPECT_RETRIES", "3") or 3))
 YTDLP_PROXY = environ.get("YTDLP_PROXY", "").strip()
 YTDLP_COOKIES_B64 = environ.get("YTDLP_COOKIES_B64", "").strip()
 COOKIE_FILE = Path("/tmp/dm_cookies.txt")
@@ -74,6 +78,7 @@ except Exception:
     log.exception("Could not create DOWNLOAD_DIR")
 
 JOBS: dict = {}
+RETRY: dict = {}  # finished jobs that still have failed qualities (for the "Retry failed" button)
 RUN_LOCK = asyncio.Lock()  # one episode at a time (small server)
 
 HTTP_HEADERS = {
@@ -87,6 +92,10 @@ HTTP_HEADERS = {
 
 class Cancelled(Exception):
     pass
+
+
+class _LinkExpired(Exception):
+    """A direct download link stopped working (needs a fresh one)."""
 
 
 # =========================
@@ -472,6 +481,7 @@ def inspect_source(source_url: str, source_name: str) -> dict:
                     "subtitle_auto": auto,
                     "sub_urls": _english_subtitle_urls(info, key, auto),
                     "imp": target,
+                    "provider": "yt-dlp",
                     "source_name": source_name,
                     "source_url": source_url,
                 }
@@ -484,21 +494,89 @@ def inspect_source(source_url: str, source_name: str) -> dict:
     raise last_error or ValueError(f"{source_name} returned no downloadable video formats.")
 
 
+_TRANSIENT_MARKERS = ("401", "403", "429", "unauthorized", "forbidden", "too many requests",
+                      "timed out", "timeout", "temporarily", "connection", "502", "503", "504")
+
+
+def _is_transient(exc: Exception) -> bool:
+    text = f"{type(exc).__name__} {exc}".lower()
+    return any(m in text for m in _TRANSIENT_MARKERS)
+
+
+def inspect_source_retry(source_url: str, source_name: str) -> dict:
+    """yt-dlp with back-off: the Dailymotion 401 usually disappears on a later try."""
+    last: Optional[Exception] = None
+    for attempt in range(1, INSPECT_RETRIES + 1):
+        try:
+            return inspect_source(source_url, source_name)
+        except Exception as e:
+            last = e
+            if attempt >= INSPECT_RETRIES or not _is_transient(e):
+                break
+            wait = 2 * attempt
+            log.info("%s transient error (%s) - retry %s/%s in %ss", source_name, type(e).__name__, attempt, INSPECT_RETRIES, wait)
+            time.sleep(wait)
+    raise last  # type: ignore[misc]
+
+
+def inspect_via_vidssave(source_urls: list) -> dict:
+    """Fallback: ask VidsSave for direct links. Returns the same shape as inspect_source()."""
+    last: Optional[Exception] = None
+    for source_name, source_url in source_urls:
+        try:
+            res = vidssave.fetch(source_url)
+        except Exception as e:
+            last = e
+            log.warning("VidsSave failed for %s: %s", source_url, e)
+            continue
+        heights = sorted(res["options"])
+        return {
+            "title": res.get("title") or source_url,
+            "heights": heights,
+            "selectors": {},
+            "direct": {h: o["url"] for h, o in res["options"].items()},
+            "sizes": {h: o["size"] for h, o in res["options"].items() if o.get("size")},
+            "subtitle_key": None,
+            "subtitle_auto": False,
+            "sub_urls": [],
+            "imp": None,
+            "provider": "vidssave",
+            "source_name": source_name,
+            "source_url": source_url,
+        }
+    raise last or vidssave.VidsSaveError("VidsSave returned nothing.")
+
+
 def inspect_episode(page_url: str) -> dict:
     raw, soup = fetch_page(page_url)
     title, season, episode = parse_episode_meta(page_url, soup)
     urls = find_source_urls(raw, soup)
     failures = []
-    for source_name in ("Dailymotion", "Rumble", "YouTube"):
-        for source_url in urls[source_name]:
-            try:
-                data = inspect_source(source_url, source_name)
-                data.update({"title": title, "season": season, "episode": episode})
-                return data
-            except Exception as e:
-                failures.append(f"{source_name}: {type(e).__name__}: {str(e)[:200]}")
+    all_sources = [(name, u) for name in ("Dailymotion", "Rumble", "YouTube") for u in urls[name]]
+
+    for source_name, source_url in all_sources:
+        try:
+            data = inspect_source_retry(source_url, source_name)
+            data.update({"title": title, "season": season, "episode": episode})
+            return data
+        except Exception as e:
+            failures.append(f"{source_name}: {type(e).__name__}: {str(e)[:200]}")
+
+    # yt-dlp failed everywhere -> VidsSave fallback (only if configured)
+    if all_sources and vidssave.ENABLED:
+        try:
+            data = inspect_via_vidssave(all_sources)
+            data.update({"title": title, "season": season, "episode": episode})
+            log.info("Using VidsSave fallback for %s", page_url)
+            return data
+        except Exception as e:
+            failures.append(f"VidsSave: {type(e).__name__}: {str(e)[:200]}")
+
     detail = " | ".join(failures[-4:])
-    raise LookupError("No usable Dailymotion/Rumble/YouTube video was found on this page." + (f"\n{detail}" if detail else ""))
+    msg = "No usable Dailymotion/Rumble/YouTube video was found on this page."
+    if any("401" in f or "unauthorized" in f.lower() for f in failures):
+        msg += "\n💡 Dailymotion refused the request (401). Refresh YTDLP_COOKIES_B64, set YTDLP_PROXY, or enable the VidsSave fallback."
+    raise LookupError(msg + (f"\n{detail}" if detail else ""))
 
 
 # =========================
@@ -635,8 +713,74 @@ def final_video_path(base: Path) -> Optional[Path]:
     return None
 
 
+def _ensure_mp4(base: Path, height: int) -> Path:
+    path = final_video_path(base)
+    if not path:
+        raise RuntimeError(f"{height}p download finished but the output file was not found.")
+    if path.suffix.lower() != ".mp4":
+        # stream copy only: a re-encode would take hours on a small server
+        mp4 = Path(str(base) + ".mp4")
+        try:
+            subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(path), "-c", "copy", str(mp4)],
+                           check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"{height}p could not be copied into MP4 ({path.suffix}): {(e.stderr or '')[-200:]}")
+        path.unlink(missing_ok=True)
+        path = mp4
+    return path
+
+
+def _download_direct(job: dict, base: Path, height: int, state: dict) -> None:
+    """VidsSave provider: plain HTTP download of a direct link (+ one link refresh if it expired)."""
+    refreshed = False
+    while True:
+        url = (job.get("direct") or {}).get(height)
+        if not url:
+            raise FormatUnavailable(f"{height}p is not offered by VidsSave")
+        ext = Path(urlparse(url).path).suffix.lower()
+        ext = ext if ext in (".mp4", ".mkv", ".webm", ".mov", ".m4v") else ".mp4"
+        out = Path(str(base) + ext)
+        try:
+            with requests.get(url, headers=HTTP_HEADERS, stream=True, timeout=(15, 60)) as r:
+                if r.status_code in (401, 403, 404, 410) and not refreshed:
+                    raise _LinkExpired(f"link expired (HTTP {r.status_code})")
+                r.raise_for_status()
+                total = int(r.headers.get("Content-Length") or 0)
+                done, t0, t_last, c_last = 0, time.monotonic(), time.monotonic(), 0
+                with open(out, "wb") as fh:
+                    for chunk in r.iter_content(chunk_size=1024 * 512):
+                        if job.get("cancel"):
+                            raise Cancelled("cancelled by admin")
+                        if not chunk:
+                            continue
+                        fh.write(chunk)
+                        done += len(chunk)
+                        now = time.monotonic()
+                        if now - t_last >= 1.0:
+                            speed = (done - c_last) / (now - t_last)
+                            state.update(downloaded=done, total=total, speed=speed,
+                                         eta=((total - done) / speed) if (total and speed) else None,
+                                         frac=(done / total) if total else None)
+                            t_last, c_last = now, done
+                if total and done < total:
+                    raise IOError(f"connection closed early ({done}/{total} bytes)")
+            return
+        except Cancelled:
+            raise
+        except _LinkExpired:
+            refreshed = True
+            log.info("VidsSave link for %sp expired - asking for a fresh one", height)
+            fresh = vidssave.fetch(job["source_url"])
+            job["direct"] = {h: o["url"] for h, o in fresh["options"].items()}
+            if height not in job["direct"]:
+                raise FormatUnavailable(f"{height}p is no longer offered by VidsSave")
+
+
 def download_quality(job: dict, jobdir: Path, height: int, base_name: str, state: dict) -> Path:
     base = jobdir / f"[{height}p] {base_name}"
+    if job.get("provider") == "vidssave":
+        _download_direct(job, base, height, state)
+        return _ensure_mp4(base, height)
     opts = ydl_opts(
         format=job["selectors"][height],
         outtmpl=tmpl_escape(base) + ".%(ext)s",
@@ -695,20 +839,7 @@ def download_quality(job: dict, jobdir: Path, height: int, base_name: str, state
     if last_err is not None:
         raise last_err
 
-    path = final_video_path(base)
-    if not path:
-        raise RuntimeError(f"{height}p download finished but the output file was not found.")
-    if path.suffix.lower() != ".mp4":
-        # stream copy only: a re-encode would take hours on a small server
-        mp4 = Path(str(base) + ".mp4")
-        try:
-            subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(path), "-c", "copy", str(mp4)],
-                           check=True, capture_output=True, text=True)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"{height}p could not be copied into MP4 ({path.suffix}): {(e.stderr or '')[-200:]}")
-        path.unlink(missing_ok=True)
-        path = mp4
-    return path
+    return _ensure_mp4(base, height)
 
 
 def _probe_title(path: Path) -> Optional[str]:
@@ -845,22 +976,35 @@ async def safe_edit(msg, text: str, kb: Optional[InlineKeyboardMarkup] = None) -
         log.debug("edit failed: %s", e)
 
 
+def provider_label(job: dict) -> str:
+    return "⚡ VidsSave (fallback)" if job.get("provider") == "vidssave" else "🛠 yt-dlp"
+
+
 def job_header(job: dict) -> str:
     ep = f"S{job['season']} · E{job['episode']}" if job.get("season") is not None else f"E{job['episode']}"
-    return f"🎬 <b>{html.escape(job['title'])}</b>\n📺 {ep}  ·  🌐 {html.escape(job.get('source_name', ''))}"
+    return (f"🎬 <b>{html.escape(job['title'])}</b>\n"
+            f"📺 {ep}  ·  🌐 {html.escape(job.get('source_name', ''))}  ·  {provider_label(job)}")
 
 
 def select_text(job: dict) -> str:
     sel = sorted(job["selected"])
     total = sum((job.get("sizes") or {}).get(h) or 0 for h in sel)
     est = f"  ·  ~{fmt_size(total)}" if total else ""
-    sub = "✅ Found" if job.get("subtitle_key") else "❌ Not available"
+    if job.get("subtitle_key"):
+        sub = "✅ Found"
+    elif job.get("provider") == "vidssave":
+        sub = "➖ Not available on the fallback source"
+    else:
+        sub = "❌ Not available"
+    note = ("⚠️ <i>yt-dlp was blocked, so the VidsSave fallback is used. Videos will have no subtitle.</i>\n\n"
+            if job.get("provider") == "vidssave" else "")
     return (
         f"{job_header(job)}\n{LINE}\n"
         f"📝 English subtitle: {sub}\n"
         f"🎚 Selected: <b>{len(sel)}</b> of {len(job['heights'])}{est}\n\n"
-        "Pick the qualities you want, then press <b>Start</b>.\n"
-        "<i>Files are sent in ascending order as documents, with the English subtitle soft-muxed.</i>"
+        f"{note}"
+        "👇 Pick the qualities, then press <b>Start</b>.\n"
+        "<i>Sent from low to high quality as documents, English subtitle soft-muxed.</i>"
     )
 
 
@@ -1155,6 +1299,13 @@ async def run_job(client: Client, job: dict) -> None:
                     verdict = "❌ <b>Nothing was sent</b> — check the errors above"
                 rows = [[InlineKeyboardButton(f"🖥 {h}p Stream", url=results[h][0]),
                          InlineKeyboardButton(f"📥 {h}p Download", url=results[h][1])] for h in ok]
+                bad = [h for h in selected if job["states"][h]["phase"] == "failed"]
+                if bad:
+                    verdict += f"\n⚠️ Failed: {', '.join(f'{h}p' for h in bad)}"
+                    rows.append([InlineKeyboardButton(f"♻ Retry failed ({len(bad)})", callback_data=f"pr|{token}|retry")])
+                total_sent = sum(job["states"][h].get("size") or 0 for h in ok)
+                if total_sent:
+                    verdict += f"\n📦 Total sent: {fmt_size(total_sent)}"
                 await safe_edit(status, render_progress(job) + f"\n{LINE}\n{verdict}",
                                 InlineKeyboardMarkup(rows) if rows else None)
                 try:
@@ -1176,6 +1327,13 @@ async def run_job(client: Client, job: dict) -> None:
             except Exception:
                 pass
             shutil.rmtree(jobdir, ignore_errors=True)
+            failed = [h for h, st_ in (job.get("states") or {}).items()
+                      if st_.get("phase") == "failed" and st_.get("error") != "Cancelled"]
+            if failed and not job.get("cancel"):
+                job["failed_heights"] = sorted(failed)
+                job["running"] = False
+                job["finished"] = time.time()
+                RETRY[token] = job
             JOBS.pop(token, None)
 
 
@@ -1192,6 +1350,9 @@ def _extract_site_url(text: str) -> Optional[str]:
 
 def _purge_old_jobs() -> None:
     now = time.time()
+    for tok, j in list(RETRY.items()):
+        if now - j.get("finished", now) > 2 * 3600:
+            RETRY.pop(tok, None)
     for tok, j in list(JOBS.items()):
         if now - j.get("created", now) > 2 * 3600 and not j.get("running"):
             JOBS.pop(tok, None)
@@ -1222,7 +1383,11 @@ async def process_link(client, message):
         data = await asyncio.to_thread(inspect_episode, url)
     except Exception as e:
         log.exception("inspect failed")
-        return await safe_edit(status, f"❌ <b>Couldn't read this link</b>\n<code>{html.escape(str(e)[:700])}</code>")
+        return await safe_edit(
+            status,
+            "❌ <b>Couldn't read this link</b>\n"
+            f"<code>{html.escape(str(e)[:700])}</code>\n\n"
+            "<i>Tip: send the link again in a minute — Dailymotion blocks are often temporary.</i>")
 
     token = uuid.uuid4().hex[:8]
     job = {
@@ -1248,6 +1413,16 @@ async def process_callback(client, query):
     if len(parts) < 3:
         return await query.answer()
     token, action = parts[1], parts[2]
+    if action == "retry":
+        old = RETRY.pop(token, None)
+        if not old:
+            return await query.answer("Retry is no longer available — send the link again.", show_alert=True)
+        old.update(selected=set(old.get("failed_heights") or []), cancel=False, running=True,
+                   status_msg=query.message, created=time.time())
+        JOBS[token] = old
+        await query.answer("Retrying failed qualities…")
+        old["task"] = asyncio.create_task(run_job(client, old))
+        return
     job = JOBS.get(token)
     if not job:
         return await query.answer("This job has expired — please send the link again.", show_alert=True)
