@@ -3,25 +3,30 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#08080f">
   <title>{{ file_name }} | {{ site_name }}</title>
   <meta name="robots" content="noindex, nofollow">
   <style>
-    :root { --bg:#0b0b12; --card:#14141f; --text:#f2f2f7; --muted:#9a9ab0; --accent1:#ec4899; --accent2:#8b5cf6; }
+    :root { --bg:#08080f; --card:#12121d; --line:#24243a; --text:#f4f4fa; --muted:#9a9ab5; --a1:#ec4899; --a2:#8b5cf6; }
     * { box-sizing:border-box; margin:0; padding:0; }
-    body { background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; min-height:100vh; display:flex; flex-direction:column; }
-    header { padding:14px 18px; background:var(--card); border-bottom:1px solid #23233a; }
-    header a { color:var(--text); text-decoration:none; font-weight:700; font-size:20px;
-      background:linear-gradient(90deg,var(--accent1),var(--accent2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
-    main { flex:1; width:100%; max-width:1000px; margin:0 auto; padding:18px; }
-    h1 { font-size:16px; font-weight:600; text-align:center; word-break:break-word; margin-bottom:14px; }
-    video { width:100%; max-height:70vh; background:#000; border-radius:12px; border:1px solid #23233a; }
-    .info { text-align:center; color:var(--muted); font-size:13px; margin:10px 0 16px; }
-    .actions { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
-    .btn { cursor:pointer; border:0; border-radius:10px; padding:11px 20px; font-size:15px; font-weight:600; color:#fff; text-decoration:none;
-      background:linear-gradient(90deg,var(--accent1),var(--accent2)); }
-    .btn.alt { background:#23233a; }
-    footer { text-align:center; padding:16px; color:var(--muted); font-size:12px; border-top:1px solid #23233a; }
+    body { background:radial-gradient(1200px 500px at 50% -10%, rgba(139,92,246,.18), transparent 60%), var(--bg);
+      color:var(--text); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; min-height:100vh; display:flex; flex-direction:column; }
+    header { padding:14px 18px; background:rgba(18,18,29,.85); backdrop-filter:blur(8px); border-bottom:1px solid var(--line); text-align:center; }
+    header a { text-decoration:none; font-weight:800; font-size:20px; letter-spacing:.3px;
+      background:linear-gradient(90deg,var(--a1),var(--a2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+    main { flex:1; width:100%; max-width:980px; margin:0 auto; padding:20px 16px; }
+    h1 { font-size:16px; font-weight:600; text-align:center; word-break:break-word; margin-bottom:14px; line-height:1.4; }
+    .badge { display:inline-block; font-size:12px; color:var(--muted); background:var(--card); border:1px solid var(--line); border-radius:999px; padding:4px 12px; }
+    .center { text-align:center; margin:12px 0 18px; }
+    .btn { cursor:pointer; border:0; border-radius:12px; padding:12px 20px; font-size:15px; font-weight:700; color:#fff; text-decoration:none; text-align:center;
+      background:linear-gradient(90deg,var(--a1),var(--a2)); transition:transform .12s, opacity .12s; }
+    .btn:hover { opacity:.92; transform:translateY(-1px); }
+    .btn.alt { background:var(--card); border:1px solid var(--line); }
+    footer { text-align:center; padding:16px; color:var(--muted); font-size:12px; border-top:1px solid var(--line); }
     footer a { color:var(--text); text-decoration:none; font-weight:600; }
+    video { width:100%; max-height:72vh; background:#000; border-radius:14px; border:1px solid var(--line); box-shadow:0 10px 40px rgba(0,0,0,.5); }
+    .actions { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; max-width:640px; margin:0 auto; }
+    .hint { text-align:center; color:var(--muted); font-size:12px; margin-top:14px; }
   </style>
 </head>
 <body>
@@ -32,22 +37,31 @@
       <source src="{{ file_url }}" type="video/mp4">
       Your browser does not support this video.
     </video>
-    <p class="info">Size: {{ file_size }}</p>
+    <div class="center"><span class="badge">📦 {{ file_size }}</span></div>
     <div class="actions">
-      <a class="btn" href="{{ file_url }}" download>Download</a>
-      <button class="btn alt" id="copy" type="button" data-url="{{ file_url }}">Copy link</button>
+      <a class="btn" href="{{ file_url }}" download>⬇ Download</a>
+      <a class="btn alt" id="vlc" href="vlc://{{ file_url }}">▶ Open in VLC</a>
+      <button class="btn alt" id="copy" type="button" data-url="{{ file_url }}">🔗 Copy link</button>
     </div>
+    <p class="hint">Tip: use <b>← →</b> to seek 10s, <b>Space</b> to play/pause, <b>F</b> for fullscreen.</p>
   </main>
   <footer>
     &copy; <script>document.write(new Date().getFullYear())</script>
     <a href="{{ website_url }}" target="_blank" rel="noopener">{{ site_name }}</a>
   </footer>
   <script>
+    var v = document.getElementById("player");
+    document.addEventListener("keydown", function (e) {
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+      if (e.key === " ") { e.preventDefault(); v.paused ? v.play() : v.pause(); }
+      else if (e.key === "ArrowRight") { v.currentTime += 10; }
+      else if (e.key === "ArrowLeft") { v.currentTime -= 10; }
+      else if (e.key.toLowerCase() === "f") { v.requestFullscreen && v.requestFullscreen(); }
+    });
     document.getElementById("copy").addEventListener("click", function () {
-      var btn = this;
-      var url = btn.dataset.url;
-      var done = function () { btn.textContent = "Copied!"; setTimeout(function () { btn.textContent = "Copy link"; }, 1500); };
-      if (navigator.clipboard) { navigator.clipboard.writeText(url).then(done); }
+      var btn = this, url = btn.dataset.url;
+      var done = function () { btn.textContent = "✅ Copied!"; setTimeout(function () { btn.textContent = "🔗 Copy link"; }, 1500); };
+      if (navigator.clipboard) { navigator.clipboard.writeText(url).then(done, function () { window.prompt("Copy this link:", url); }); }
       else { window.prompt("Copy this link:", url); }
     });
   </script>
